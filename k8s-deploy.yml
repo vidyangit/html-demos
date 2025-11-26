@@ -17,6 +17,7 @@ spec:
       containers:
       - name: html-ci
         image: vidya125/html-ci:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
 ---
