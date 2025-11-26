@@ -1,58 +1,50 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    IMAGE = "vidya125/html-ci:latest"
-    DOCKERHUB_CREDS = "docker_creds"       // replace with actual Jenkins credential id
-    KUBECONFIG_FILE = "kubeconfig-file"       // replace with actual Jenkins file cred id
-  }
+    stages {
 
-  stages {
-
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
-    }
-
-    stage('Build Docker Image') {
-      steps {
-        script {
-          sh "docker build -t ${env.IMAGE} ."
+        stage('Clone Code') {
+            steps {
+                checkout scm
+            }
         }
-      }
-    }
 
-    stage('Login & Push Image') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: env.DOCKERHUB_CREDS, usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-          sh '''
-            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
-            docker push ${IMAGE}
-          '''
+        stage('Build Image with Commit Tag') {
+            steps {
+                script {
+                    COMMIT = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
+
+                    env.IMAGE = "vidya125/html-ci:${COMMIT}"
+
+                    sh "docker build -t ${IMAGE} ."
+                }
+            }
         }
-      }
-    }
 
-    stage('Deploy to Kubernetes') {
-      steps {
-        // write secret-file kubeconfig to $KUBECONFIG and use kubectl
-        withCredentials([file(credentialsId: env.KUBECONFIG_FILE, variable: 'KCFG')]) {
-          sh '''
-            export KUBECONFIG=${KCFG}
-            # Replace image in manifest and apply
-            sed "s#YOUR_DOCKERHUB_ID/html-ci:latest#${IMAGE}#g" k8s-deploy.yaml > /tmp/manifest.yaml
-            kubectl apply -f /tmp/manifest.yaml
-            kubectl rollout status deployment/html-ci --timeout=120s || kubectl describe deployment/html-ci
-          '''
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh """
+                        echo "$PASS" | docker login -u "$USER" --password-stdin
+                        docker push ${IMAGE}
+                    """
+                }
+            }
         }
-      }
-    }
-  }
 
-  post {
-    always {
-      sh 'kubectl get pods -o wide || true'
+        stage('Deploy to Kubernetes') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig-file', variable: 'KCFG')]) {
+                    sh """
+                        export KUBECONFIG=$KCFG
+                        kubectl set image deployment/html-ci html-ci=${IMAGE}
+                        kubectl rollout status deployment/html-ci
+                    """
+                }
+            }
+        }
     }
-  }
 }
